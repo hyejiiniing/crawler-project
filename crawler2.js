@@ -66,6 +66,12 @@ async function saveTextFile(filepath, content) {
   fs.writeFileSync(filepath, content ?? "", "utf-8");
 }
 
+function parsePrice(str) {
+  if (!str) return 0;
+  const num = str.replace(/[^0-9]/g, "");
+  return num ? parseInt(num, 10) : 0;
+}
+
 async function crawlProduct() {
   const driver = await new Builder()
     .forBrowser("chrome")
@@ -89,7 +95,7 @@ async function crawlProduct() {
       await driver.get(url);
       await driver.sleep(800);
 
-      const products = await driver.findElements(By.css(".goods_list .box"));
+      const products = await driver.findElements(By.css(".goodsList"));
       console.log(`[페이지 ${page}] 상품 개수: ${products.length}`);
       if (products.length === 0) {
         hasNext = false;
@@ -98,7 +104,9 @@ async function crawlProduct() {
 
       const productLinks = [];
       for (let p of products) {
-        const image = await p.findElement(By.css("img")).getAttribute("src");
+        const image = await p
+          .findElement(By.css(".goodsImg img"))
+          .getAttribute("src");
         const nameElement = await p.findElement(By.css(".goodsnm a"));
         const name = await nameElement.getText();
         const detailUrl = toAbsoluteUrl(await nameElement.getAttribute("href"));
@@ -123,27 +131,68 @@ async function crawlProduct() {
         await driver.get(detailUrl);
         await driver.sleep(800);
 
-        let deliveryPrice = "";
+        let deliveryPrice = 0;
         try {
-          const deliveryElement = await driver.findElement(
-            By.css(".delv_price_B strong")
-          );
-          deliveryPrice = (await deliveryElement.getText()).trim();
-        } catch {
-          deliveryPrice = "";
+          const rows = await driver.findElements(By.css("ul.cont_row"));
+          for (let row of rows) {
+            const titleEl = await row.findElement(By.css("li.cont_title"));
+            const title = (await titleEl.getText()).trim();
+
+            if (title.includes("배송비")) {
+              const descEl = await row.findElement(By.css("li.cont_desc"));
+              const desc = (await descEl.getText()).trim();
+              deliveryPrice = parseInt(desc.replace(/[^0-9]/g, ""), 10);
+              break;
+            }
+          }
+        } catch (err) {
+          deliveryPrice = 0;
         }
+
+        const returnPrice = deliveryPrice;
+        const changePrice = deliveryPrice * 2;
+
+        let option_comb_list = [];
+        let option_info_list = [];
+        try {
+          const selectEl = await driver.findElement(
+            By.css("select[name='opt[]']")
+          );
+          const options = await selectEl.findElements(By.css("option"));
+          const body = [];
+          for (let opt of options) {
+            const value = await opt.getAttribute("value");
+            const text = (await opt.getText()).trim();
+            if (!value || value === "" || text.includes("==")) continue;
+            const pathVal = `${code}:${text}`;
+            body.push({
+              path: pathVal,
+              name: text,
+              img: "",
+              is_soldout: false,
+            });
+            option_comb_list.push({
+              path: pathVal,
+              price: 0,
+              img: "",
+              is_soldout: false,
+            });
+          }
+          if (body.length > 0) {
+            option_info_list.push({ title: "구성", body });
+          }
+        } catch {}
 
         for (let s = 0; s < 8; s++) {
           await driver.executeScript("window.scrollBy(0, window.innerHeight)");
           await driver.sleep(200);
         }
 
-        // 상세 이미지 수집 (<center>, <div style="text-align:center">)
         const detailSrcs = await driver.executeScript(() => {
           const pick = (img) =>
             img.getAttribute("src") || img.getAttribute("data-src") || "";
           const nodes = document.querySelectorAll(
-            "center img, div[style*='text-align:center'] img"
+            "center[style*='1120px'] img"
           );
           const urls = Array.from(nodes).map(pick).filter(Boolean);
           return Array.from(new Set(urls));
@@ -151,9 +200,7 @@ async function crawlProduct() {
 
         let idx = 1;
         for (const src of detailSrcs) {
-          const abs = src.startsWith("http")
-            ? src
-            : window.location.origin + src;
+          const abs = src.startsWith("http") ? src : location.origin + src;
           await downloadImage(
             abs,
             path.join(detailDir, `상세이미지_${idx}.jpg`)
@@ -168,24 +215,20 @@ async function crawlProduct() {
           product_id: code,
           origin_path: detailUrl,
           product_name: name,
-          product_price: price,
-          product_origin_price: price,
-          product_minimum_price: price,
+          product_price: parsePrice(price),
+          product_origin_price: parsePrice(price),
+          product_minimum_price: parsePrice(price),
           currency_unit: "원",
           delivery_price: deliveryPrice,
-          return_price: deliveryPrice,
-          change_price: deliveryPrice
-            ? String(parseInt(deliveryPrice.replace(/[^0-9]/g, "")) * 2) + "원"
-            : "",
-          option_comb_list: [],
-          option_info_list: [],
+          return_price: returnPrice,
+          change_price: changePrice,
+          option_comb_list,
+          option_info_list,
           keyword_list: [],
           thumbnail_img: image,
           main_img: image,
           product_img_list: [image],
-          product_info_img_list: detailSrcs.map((src) =>
-            src.startsWith("http") ? src : BASE2_URL + src
-          ),
+          product_info_img_list: detailSrcs.map((src) => toAbsoluteUrl(src)),
           state: 0,
           is_discount: 0,
           is_soldout: 0,
