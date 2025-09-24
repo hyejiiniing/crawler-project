@@ -1,8 +1,6 @@
 require("dotenv").config();
 const { Builder, By, until } = require("selenium-webdriver");
 const chrome = require("selenium-webdriver/chrome");
-const knex = require("knex");
-const knexConfig = require("./knexfile.js");
 const fs = require("fs");
 const path = require("path");
 const http = require("http");
@@ -10,23 +8,10 @@ const https = require("https");
 
 const service = new chrome.ServiceBuilder(require("chromedriver").path);
 
-const LOGIN_ID = process.env.CHOITEM_ID;
-const LOGIN_PW = process.env.CHOITEM_PW;
+const LOGIN_ID = process.env.ID;
+const LOGIN_PW = process.env.PW;
 const LOGIN_URL = process.env.LOGIN_URL;
-const TARGET_URL = process.env.CHOITEM_URL;
-
-const db = knex(knexConfig.development);
-
-function slugify(text) {
-  return text
-    .toString()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-zA-Z0-9가-힣]/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .trim();
-}
+const TARGET_URL = process.env.TARGET_URL;
 
 function toAbsoluteUrl(u) {
   if (!u) return "";
@@ -87,7 +72,8 @@ async function crawlProduct() {
     .build();
 
   try {
-    await driver.get("https://choitemb2b.com/member/login.html");
+    // 로그인
+    await driver.get(LOGIN_URL);
     await driver.findElement(By.name("member_id")).sendKeys(LOGIN_ID);
     await driver.findElement(By.name("member_passwd")).sendKeys(LOGIN_PW);
     await driver.wait(
@@ -117,7 +103,6 @@ async function crawlProduct() {
         const nameElement = await p.findElement(By.css("p.name a"));
         const rawName = await nameElement.getAttribute("textContent");
         const name = rawName.replace("상품명 :", "").trim();
-        const safeName = name;
 
         let price = "";
         try {
@@ -135,25 +120,34 @@ async function crawlProduct() {
         let detailUrl = await nameElement.getAttribute("href");
         detailUrl = toAbsoluteUrl(detailUrl);
 
-        productLinks.push({ name, safeName, price, image, detailUrl });
+        productLinks.push({ name, price, image, detailUrl });
       }
 
       for (let prod of productLinks) {
-        const { name, safeName, price, image, detailUrl } = prod;
+        const { name, price, image, detailUrl } = prod;
 
-        const baseDir = path.join(__dirname, safeName);
+        const baseDir = path.join(__dirname, name);
         const detailDir = path.join(baseDir, "상세정보사진");
         if (!fs.existsSync(baseDir)) fs.mkdirSync(baseDir, { recursive: true });
         if (!fs.existsSync(detailDir))
           fs.mkdirSync(detailDir, { recursive: true });
 
         await downloadImage(image, path.join(baseDir, "대표이미지.jpg"));
-
         await saveTextFile(path.join(baseDir, "상품명.text"), name);
         await saveTextFile(path.join(baseDir, "가격.text"), price);
 
         await driver.get(detailUrl);
         await driver.sleep(800);
+
+        let deliveryPrice = "";
+        try {
+          const deliveryElement = await driver.findElement(
+            By.css(".delv_price_B strong")
+          );
+          deliveryPrice = (await deliveryElement.getText()).trim();
+        } catch {
+          deliveryPrice = "";
+        }
 
         try {
           await driver.wait(
@@ -194,7 +188,38 @@ async function crawlProduct() {
 
         console.log(`${name} 처리 완료 (상세이미지 ${idx - 1}개 저장)`);
 
-        await db("products").insert({ name, price, image_url: image });
+        const productInfoJson = {
+          idx: page,
+          product_id: "",
+          origin_path: detailUrl,
+          product_name: name,
+          product_price: price,
+          product_origin_price: price,
+          product_minimum_price: price,
+          currency_unit: "원",
+          delivery_price: deliveryPrice,
+          return_price: 0,
+          change_price: 0,
+          option_comb_list: [],
+          option_info_list: [],
+          keyword_list: [],
+          thumbnail_img: image,
+          main_img: image,
+          product_img_list: image,
+          product_info_img_list: detailSrcs.map((src) => toAbsoluteUrl(src)),
+
+          state: 0,
+          is_discount: 0,
+          is_soldout: 0,
+          is_img_save: 0,
+          discount_per: 0,
+          delivery_info: "",
+        };
+
+        await saveTextFile(
+          path.join(baseDir, "productInfo.text"),
+          JSON.stringify(productInfoJson, null, 2)
+        );
       }
 
       page++;
@@ -203,7 +228,6 @@ async function crawlProduct() {
     console.error("크롤링 실패:", err);
   } finally {
     await driver.quit();
-    await db.destroy();
   }
 }
 
