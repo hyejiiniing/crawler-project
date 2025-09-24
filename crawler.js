@@ -12,11 +12,12 @@ const LOGIN_ID = process.env.ID;
 const LOGIN_PW = process.env.PW;
 const LOGIN_URL = process.env.LOGIN_URL;
 const TARGET_URL = process.env.TARGET_URL;
+const BASE_URL = process.env.BASE_URL;
 
 function toAbsoluteUrl(u) {
   if (!u) return "";
   if (u.startsWith("//")) return "https:" + u;
-  if (u.startsWith("/")) return "https://choitemb2b.com" + u;
+  if (u.startsWith("/")) return BASE_URL + u;
   if (u.startsWith("http:")) return u.replace(/^http:/, "https:");
   return u;
 }
@@ -139,14 +140,84 @@ async function crawlProduct() {
         await driver.get(detailUrl);
         await driver.sleep(800);
 
-        let deliveryPrice = "";
+        let productId = "";
+        try {
+          const idElement = await driver.findElement(
+            By.xpath(
+              "//th[span[text()='자체상품코드']]/following-sibling::td/span"
+            )
+          );
+          productId = (await idElement.getText()).trim();
+        } catch {
+          productId = "";
+        }
+
+        let deliveryPrice = 0;
         try {
           const deliveryElement = await driver.findElement(
             By.css(".delv_price_B strong")
           );
-          deliveryPrice = (await deliveryElement.getText()).trim();
+          const dp = (await deliveryElement.getText()).trim();
+          deliveryPrice = parseInt(dp.replace(/[^0-9]/g, ""), 10);
         } catch {
-          deliveryPrice = "";
+          deliveryPrice = 0;
+        }
+
+        const returnPrice = deliveryPrice;
+        const changePrice = deliveryPrice * 2;
+
+        let optionCombList = [];
+        let optionInfoList = [];
+        try {
+          const selects = await driver.findElements(
+            By.css("select[option_product_no]")
+          );
+          for (let sel of selects) {
+            const productNo = await sel.getAttribute("option_product_no");
+            const title = (await sel.getAttribute("option_title")) || "옵션";
+            const options = await sel.findElements(By.css("option"));
+            const bodyList = [];
+
+            for (let opt of options) {
+              const value = await opt.getAttribute("value");
+              const disabled = await opt.getAttribute("disabled");
+              if (!value || value === "*" || value === "**" || disabled)
+                continue;
+
+              let optName = (await opt.getText()).trim();
+              let addPrice = 0;
+              const match = optName.match(/\(\s*\+?([\d,]+)원\s*\)/);
+              if (match) {
+                addPrice = parseInt(match[1].replace(/,/g, ""), 10);
+              }
+
+              const cleanName = optName.replace(/\s*\(\+?.*원\)/, "");
+              const pathKey = `${productNo}:${cleanName}`;
+
+              optionCombList.push({
+                path: pathKey,
+                price: addPrice,
+                img: "",
+                is_soldout: false,
+              });
+
+              bodyList.push({
+                path: pathKey,
+                name: optName,
+                img: "",
+                is_soldout: false,
+              });
+            }
+
+            if (bodyList.length > 0) {
+              optionInfoList.push({
+                title,
+                body: bodyList,
+              });
+            }
+          }
+        } catch (e) {
+          console.log("옵션 없음:", e.message);
         }
 
         try {
@@ -190,24 +261,24 @@ async function crawlProduct() {
 
         const productInfoJson = {
           idx: page,
-          product_id: "",
+          product_id: productId,
           origin_path: detailUrl,
           product_name: name,
-          product_price: price,
-          product_origin_price: price,
-          product_minimum_price: price,
+          product_price: parseInt(price.replace(/[^0-9]/g, ""), 10) || 0,
+          product_origin_price: parseInt(price.replace(/[^0-9]/g, ""), 10) || 0,
+          product_minimum_price:
+            parseInt(price.replace(/[^0-9]/g, ""), 10) || 0,
           currency_unit: "원",
           delivery_price: deliveryPrice,
-          return_price: 0,
-          change_price: 0,
-          option_comb_list: [],
-          option_info_list: [],
+          return_price: returnPrice,
+          change_price: changePrice,
+          option_comb_list: optionCombList,
+          option_info_list: optionInfoList,
           keyword_list: [],
           thumbnail_img: image,
           main_img: image,
-          product_img_list: image,
+          product_img_list: [image],
           product_info_img_list: detailSrcs.map((src) => toAbsoluteUrl(src)),
-
           state: 0,
           is_discount: 0,
           is_soldout: 0,
