@@ -13,8 +13,10 @@
     "axios": "^1.12.2",
     "cheerio": "^1.1.2",
     "chromedriver": "^140.0.3",
+    "dotenv": "^17.2.2",
     "knex": "^3.1.0",
     "mysql2": "^3.15.0",
-    "selenium-webdriver": "^4.35.0"
+    "selenium-webdriver": "^4.35.0",
+    "webdriver-manager": "^12.1.9"
   }
 }
