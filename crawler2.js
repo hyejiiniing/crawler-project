@@ -133,18 +133,13 @@ async function crawlProduct() {
 
         let deliveryPrice = 0;
         try {
-          const rows = await driver.findElements(By.css("ul.cont_row"));
-          for (let row of rows) {
-            const titleEl = await row.findElement(By.css("li.cont_title"));
-            const title = (await titleEl.getText()).trim();
-
-            if (title.includes("배송비")) {
-              const descEl = await row.findElement(By.css("li.cont_desc"));
-              const desc = (await descEl.getText()).trim();
-              deliveryPrice = parseInt(desc.replace(/[^0-9]/g, ""), 10);
-              break;
-            }
-          }
+          const deliveryElement = await driver.findElement(
+            By.xpath(
+              "//li[contains(@class,'cont_title') and contains(text(),'배송비')]/following-sibling::li[@class='cont_desc']"
+            )
+          );
+          const desc = (await deliveryElement.getText()).trim();
+          deliveryPrice = parseInt(desc.replace(/[^0-9]/g, ""), 10);
         } catch (err) {
           deliveryPrice = 0;
         }
